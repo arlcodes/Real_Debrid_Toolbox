@@ -3,6 +3,7 @@
 Python Script to automate Real Debrid actions via API
 
 Main functions:
+
 1 - Upload torrent files (converts to magnets) in current dir
 
 2 - Check status of in progress torrents
