@@ -1,9 +1,0 @@
-Update config.json with current API key, found here: https://real-debrid.com/apitoken
-
-Run via Start batch file
-
-Upload multiple .torrent files (in script dir) and auto start processing
-Check all torrents for duplicate hashes
-Check download status of non completed files
-
-Successfully uploaded files moved to 'Processed Files'
