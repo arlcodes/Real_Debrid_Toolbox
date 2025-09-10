@@ -416,6 +416,241 @@ def download_file(url, filename, position=0):
     return False
 
 
+
+# ---------------------------
+# Hosted Links Converter
+# ---------------------------
+
+def hoster_downloader():
+#Handles direct hosted links added to links.txt, basic catching for single file or folders 
+
+    # 1. Optional host status check
+    check_status = input("Check host status first? [y/N] (default N): ").strip().lower()
+    if check_status in ("y", "yes"):
+        try:
+            status = rd_request("GET", "hosts/status")
+            
+            only_online = input("Only show online hosts? [Y/n] (default Y): ").strip().lower()
+            show_only_online = only_online in ("", "y", "yes")
+            
+            print("\n=== Host Status ===")
+            for host, info in status.items():
+                is_online = info.get("supported") and info.get("status") == "up"
+                
+                if show_only_online and not is_online:
+                    continue  # skip offline hosts
+                
+                line = f"{host:20} - "
+                if is_online:
+                    line += "✅ Online"
+                else:
+                    line += "❌ Offline/Unsupported"
+                print(line)
+            print()
+            
+        except requests.RequestException as e:
+            print(f"⚠️ Failed to fetch host status: {e}")
+
+    # 2. Load links.txt file (case-insensitive)
+    links_file = None
+    for f in os.listdir():
+        if f.lower() == "links.txt":
+            links_file = f
+            break
+
+    if not links_file:
+        print("❌ No 'links.txt' file found in current directory.")
+        return
+
+    with open(links_file, "r", encoding="utf-8") as f:
+        raw_links = [line.strip() for line in f if line.strip()]
+
+    if not raw_links:
+        print("❌ 'links.txt' file is empty.")
+        return
+
+    print(f"\n📄 Found {len(raw_links)} links in '{links_file}'.\n")
+
+    # 3. Unrestrict each link
+    unrestricted = []
+    for link in raw_links:
+        try:
+            print(f"\n🔄 Processing {link}\n")
+            processed = False
+
+            # 3a. Basic check if link is a folder, (mega has folder in URL, not sure about other hosts)
+            if "folder" in link.lower():
+                try:
+                    result = rd_request("POST", "unrestrict/folder", data={"link": link})
+                    if result:
+                        for file_info in result:
+                            if isinstance(file_info, dict):
+                                filename = file_info.get("filename", "Unknown")
+                                download = file_info.get("download")
+                                filesize = file_info.get("filesize")
+                                # Try to unrestrict if download is missing
+                                if not download and "link" in file_info:
+                                    try:
+                                        dl = rd_request("POST", "unrestrict/link", data={"link": file_info["link"]})
+                                        download = dl.get("download")
+                                        filesize = dl.get("filesize", filesize)
+                                        filename = dl.get("filename", filename)
+                                    except requests.RequestException:
+                                        print(f"⚠️ Failed to unrestrict individual file: {filename}")
+                            elif isinstance(file_info, str):
+                                filename = file_info
+                                download = None
+                                filesize = None
+                                # Try to unrestrict the string as a link
+                                try:
+                                    dl = rd_request("POST", "unrestrict/link", data={"link": file_info})
+                                    filename = dl.get("filename", filename)
+                                    download = dl.get("download")
+                                    filesize = dl.get("filesize", filesize)
+                                except requests.RequestException:
+                                    print(f"⚠️ Failed to unrestrict file: {filename}")
+                            else:
+                                continue
+
+                            unrestricted.append({
+                                "filename": filename,
+                                "download": download,
+                                "filesize": filesize,
+                            })
+
+                            size_str = f" ({format_size(filesize)})" if filesize else ""
+                            print(f"✅ Folder file: {filename}{size_str}")
+
+                        processed = True
+                    else:
+                        print(f"⚠️ No files found in folder: {link}")
+                        processed = True
+                except requests.RequestException:
+                    pass  # fallback to single-file if folder fails
+
+            # 3b. Single-file unrestrict if not processed
+            if not processed:
+                try:
+                    result = rd_request("POST", "unrestrict/link", data={"link": link})
+                    filename = result.get("filename", link)
+                    download = result.get("download")
+                    filesize = result.get("filesize")
+                    unrestricted.append({
+                        "filename": filename,
+                        "download": download,
+                        "filesize": filesize,
+                    })
+                    size_str = f" ({format_size(filesize)})" if filesize else ""
+                    print(f"✅ Processed: {filename}{size_str}")
+                    processed = True
+                except requests.RequestException:
+                    # fallback to folder method
+                    try:
+                        result = rd_request("POST", "unrestrict/folder", data={"link": link})
+                        if result:
+                            for file_info in result:
+                                if isinstance(file_info, dict):
+                                    filename = file_info.get("filename", "Unknown")
+                                    download = file_info.get("download")
+                                    filesize = file_info.get("filesize")
+                                    if not download and "link" in file_info:
+                                        try:
+                                            dl = rd_request("POST", "unrestrict/link", data={"link": file_info["link"]})
+                                            download = dl.get("download")
+                                            filesize = dl.get("filesize", filesize)
+                                            filename = dl.get("filename", filename)
+                                        except requests.RequestException:
+                                            print(f"⚠️ Failed to unrestrict individual file: {filename}")
+                                elif isinstance(file_info, str):
+                                    filename = file_info
+                                    download = None
+                                    filesize = None
+                                    try:
+                                        dl = rd_request("POST", "unrestrict/link", data={"link": file_info})
+                                        filename = dl.get("filename", filename)
+                                        download = dl.get("download")
+                                        filesize = dl.get("filesize", filesize)
+                                    except requests.RequestException:
+                                        print(f"⚠️ Failed to unrestrict file: {filename}")
+                                else:
+                                    continue
+
+                                unrestricted.append({
+                                    "filename": filename,
+                                    "download": download,
+                                    "filesize": filesize,
+                                })
+                                size_str = f" ({format_size(filesize)})" if filesize else ""
+                                print(f"✅ Folder file (fallback): {filename}{size_str}")
+
+                            processed = True
+                        else:
+                            print(f"❌ Could not process link: {link}")
+                    except requests.RequestException:
+                        print(f"❌ Could not process link at all: {link}")
+
+        except Exception as e:
+            print(f"⚠️ Unexpected error processing {link}: {e}")
+
+    if not unrestricted:
+        print("❌ No valid unrestricted links were generated.")
+        return
+
+    # 4. Let user pick files to download
+    print("\nAvailable files:\n")
+    for idx, f in enumerate(unrestricted, 1):
+        size_str = f" ({format_size(f['filesize'])})" if f['filesize'] else ""
+        print(f"{idx}: {f['filename']}{size_str}")
+    print("\n0: Download all files")
+
+    sel = input("\nSelect files by number (comma separated, ranges allowed, or 0 for all): ").strip()
+    if sel in ("", "0"):
+        selected = unrestricted
+    else:
+        indices = parse_selection(sel, len(unrestricted))
+        selected = [unrestricted[i - 1] for i in indices]
+
+    if not selected:
+        print("⚠️ No files selected.")
+        return
+
+    # 5. Filter out files with no download URL
+    selected_valid = []
+    for f in selected:
+        if f.get("download"):
+            selected_valid.append(f)
+        else:
+            print(f"⚠️ Skipping '{f['filename']}' — no download URL available.")
+
+    if not selected_valid:
+        print("❌ None of the selected files have valid download URLs.")
+        return
+
+    # 6. Parallel downloads
+    if len(selected_valid) > 1:
+        parallel_choice = input("Download files in parallel? (y/N): ").strip().lower()
+        if parallel_choice == "y":
+            while True:
+                try:
+                    num_workers = int(input(f"How many files to download at once? (1-{min(MAX_PARALLEL_DOWNLOADS,len(selected_valid))}): "))
+                    if 1 <= num_workers <= min(MAX_PARALLEL_DOWNLOADS, len(selected_valid)):
+                        break
+                except ValueError:
+                    continue
+
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = []
+                for pos, f in enumerate(selected_valid):
+                    futures.append(executor.submit(download_file, f["download"], f["filename"], pos))
+                for future in as_completed(futures):
+                    future.result()
+            return
+
+    # 7. Sequential download
+    for f in selected_valid:
+        download_file(f["download"], f["filename"])
+
+
 # ---------------------------
 # In Progress Function
 # ---------------------------
@@ -714,9 +949,12 @@ def main_menu():
 
         print("1. Upload .torrent files")
         print("2. Check in-progress torrents")
-        print("3. Download files")
-        print("4. Find & remove duplicate torrents")
-        print("5. Renew Subscription")
+        print("3. Download torrent files")
+        print("4. Download hoster links")
+        print("5. Find & remove duplicate torrents")
+        print("6. Renew Subscription")
+
+
         print("0. Exit\n")
         choice = input("Select an option: ").strip()
         if choice == "1":
@@ -725,10 +963,13 @@ def main_menu():
             in_progress()
         elif choice == "3":
             torrent_downloader()
-        elif choice == "4":  
+        elif choice == "4":
+            hoster_downloader()
+        elif choice == "5":  
             remove_duplicates()
-        elif choice == "5":
+        elif choice == "6":
             referal()
+
         elif choice == "0":
             url = "http://real-debrid.com/?id=3488563"
             print("If you liked this tool you can support via my referral code next time you renew your sub.")
