@@ -312,13 +312,26 @@ def torrent_downloader():
         print("⚠️ No unrestricted links could be generated.")
         return
 
-    # 8 File selection
-    sel_files = input("\nSelect files to download (comma separated, ranges allowed, or 0 for all): ").strip()
-    if sel_files == "0" or sel_files == "":
+    # 8 File selection (auto-select if only one file)
+    if len(file_map) == 1:
         selected_files = file_map
+        f = file_map[0]
+        print(f"\n✅ Auto selected single file torrent: {f['filename']} ({format_size(f['filesize'])})")
     else:
-        indices = parse_selection(sel_files, len(file_map))
-        selected_files = [file_map[i-1] for i in indices]
+        sel_files = input(
+            "\nSelect files to download (comma separated, ranges allowed, or 0 for all): "
+        ).strip()
+
+        if sel_files == "0" or sel_files == "":
+            selected_files = file_map
+        else:
+            indices = parse_selection(sel_files, len(file_map))
+            selected_files = [file_map[i - 1] for i in indices]
+
+        if not selected_files:
+            print("⚠️ No files selected.")
+            return
+
 
     # 9 Parallel download prompt
     if len(selected_files) > 1:
@@ -381,8 +394,9 @@ def download_file(url, filename, position=0):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     filename = resolve_filename_collision(DOWNLOAD_DIR, filename)
     filepath = os.path.join(DOWNLOAD_DIR, filename)
-    
-    
+
+    pbar = None
+
     try:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -390,30 +404,45 @@ def download_file(url, filename, position=0):
                     resp.raise_for_status()
                     total_size = int(resp.headers.get("Content-Length", 0))
                     chunk_size = 8192
-                    with open(filepath, "wb") as f, tqdm(
-                        total=total_size,
-                        unit='B',
-                        unit_scale=True,
-                        desc=filename,
-                        position=position,
-                        leave=True,
-                        dynamic_ncols=True,
-                        bar_format="{percentage:3.0f}% {n_fmt}/{total_fmt} @ {rate_fmt} - {desc}"
-                    ) as pbar:
+
+                    # Create tqdm ONCE
+                    if pbar is None:
+                        pbar = tqdm(
+                            total=total_size,
+                            unit="B",
+                            unit_scale=True,
+                            desc=filename,
+                            position=position,
+                            leave=False,
+                            dynamic_ncols=True,
+                            bar_format="{percentage:3.0f}% {n_fmt}/{total_fmt} @ {rate_fmt}"
+                        )
+
+                    with open(filepath, "wb") as f:
                         for chunk in resp.iter_content(chunk_size=chunk_size):
                             if chunk:
                                 f.write(chunk)
                                 pbar.update(len(chunk))
-                print(f"✅ Downloaded: {filename}")
+
+                tqdm.write(f"✅ Downloaded: {filename}")
                 return True
+
             except requests.RequestException as e:
-                print(f"\n⚠️ Download attempt {attempt} failed for '{filename}': {e}")
+                if pbar:
+                    pbar.reset()
+                tqdm.write(f"⚠️ Download attempt {attempt} failed for '{filename}': {e}")
                 time.sleep(2)
-        print(f"\n❌ Failed to download: {filename}")
+
+        tqdm.write(f"❌ Failed to download: {filename}")
         return False
+
     except KeyboardInterrupt:
-        print("\n⚠️ Download interrupted by user.")
-    return False
+        tqdm.write("⚠️ Download interrupted by user.")
+        return False
+
+    finally:
+        if pbar:
+            pbar.close()
 
 
 
@@ -786,6 +815,7 @@ def wait_for_metadata(torrent_id, token, max_wait=15, interval=5):
     print("⚠️ Timeout waiting for metadata or files.")
     return None, None
 
+
 def prompt_user_to_select_files(files):
     print("\nAvailable files in torrent:\n")
     for idx, f in enumerate(files, 1):
@@ -793,19 +823,27 @@ def prompt_user_to_select_files(files):
         size = f.get("bytes", 0)
         size_mb = round(size / (1024 * 1024), 2)
         print(f"{idx}: {name} ({size_mb} MB)")
+
     print("\n0: Select all files")
-    
+
     while True:
-        selection_input = input("\nEnter file numbers to select (e.g. 1,3-5) or 0 for all: ").strip()
+        selection_input = input(
+            "\nEnter file numbers to select (e.g. 1,3-5) or leave blank to cancel and delete: "
+        ).strip()
+
         if selection_input == "0":
             return [f["id"] for f in files]
+
         if selection_input == "":
-            # User pressed Enter without typing numbers → return empty list
-            return []
+            return None
+
         selected_indexes = parse_selection(selection_input, len(files))
         if selected_indexes:
             return [files[i - 1]["id"] for i in selected_indexes]
+
         print("❌ Invalid selection. Try again.")
+
+
 
 def wait_for_download_start(torrent_id, token, max_attempts=12, interval=5):
     attempts = 0
@@ -847,10 +885,14 @@ def process_torrent_workflow(torrent_path, token, host=None):
             print(f"✅ Automatically selecting single file: {filename}")
         else:
             selected_ids = prompt_user_to_select_files(files)
+ 
+        # choosing to cancel
+        if selected_ids is None:
+            delete_torrent(tid)
+            return False
 
-        # Check if user selected no files
+        # Backup ceck if user selected no files
         if not selected_ids:
-            print(f"⚠️ No files selected for torrent ID {tid}, deleting torrent...")
             delete_torrent(tid)
             return False
 
@@ -939,7 +981,7 @@ def remove_duplicates():
 # ---------------------------
 def main_menu():
        
-    print("\nIf you liked this tool you can support via my referral code next time you renew your sub.\n")
+   # print("\nIf you liked this tool you can support via my referral code next time you renew your sub.\n")
     
     if CHECK_PREMIUM:
         check_user_info()
@@ -967,8 +1009,8 @@ def main_menu():
             hoster_downloader()
         elif choice == "5":  
             remove_duplicates()
-        elif choice == "6":
-            referal()
+       # elif choice == "6":
+       #     referal()
 
         elif choice == "0":
             url = "http://real-debrid.com/?id=3488563"
